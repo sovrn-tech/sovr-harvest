@@ -1,0 +1,106 @@
+name: Image
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Do not cancel a publish that runs. A cancel can leave a tag without a signature.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - system: x86_64-linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Restores the Nix store from an earlier run. See ci.yml.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-image-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'go.sum', 'nix/**') }}
+          restore-prefixes-first-match: nix-image-${{ runner.os }}-${{ runner.arch }}-
+      - name: Log in to the registry
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+      # Each runner builds the image for its own system. Nix does not need emulation.
+      - name: Build the image
+        run: nix build .#packages.${{ matrix.system }}.docker --print-build-logs
+      # Push to a tag for each commit and architecture. The merge job refers to this tag.
+      - name: Push the image
+        run: |
+          image="$REGISTRY/${GITHUB_REPOSITORY,,}"
+          nix run --inputs-from . nixpkgs#skopeo -- copy --format oci \
+            docker-archive:result "docker://$image:${GITHUB_SHA::7}-${{ matrix.arch }}"
+
+  merge:
+    name: merge and sign
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      # Keyless cosign signs with the OIDC token of this workflow.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - name: Log in to the registry
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+      - name: Create the multi-arch index
+        id: index
+        run: |
+          image="$REGISTRY/${GITHUB_REPOSITORY,,}"
+          short="${GITHUB_SHA::7}"
+          tags=(-t "$image:$short")
+          case "$GITHUB_REF" in
+            refs/heads/main) tags+=(-t "$image:main") ;;
+            # A tag with "-" is a prerelease. It does not move "latest".
+            refs/tags/v*-*)  tags+=(-t "$image:${GITHUB_REF_NAME#v}") ;;
+            refs/tags/v*)    tags+=(-t "$image:${GITHUB_REF_NAME#v}" -t "$image:latest") ;;
+          esac
+          docker buildx imagetools create "${tags[@]}" \
+            "$image:$short-amd64" "$image:$short-arm64"
+          digest=$(docker buildx imagetools inspect "$image:$short" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "ref=$image@$digest" >> "$GITHUB_OUTPUT"
+      # --recursive also signs the manifest of each architecture.
+      - name: Sign the image
+        run: nix run --inputs-from . nixpkgs#cosign -- sign --yes --recursive "$REF"
+        env:
+          REF: ${{ steps.index.outputs.ref }}
+      - name: Verify the signature
+        run: |
+          nix run --inputs-from . nixpkgs#cosign -- verify "$REF" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF" > /dev/null
+        env:
+          REF: ${{ steps.index.outputs.ref }}

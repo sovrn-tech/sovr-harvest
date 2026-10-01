@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+# Do not cancel a release that runs. A cancel can leave a release without all files.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - system: x86_64-linux
+            arch: amd64
+            runner: ubuntu-24.04
+          - system: aarch64-linux
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Restores the Nix store from an earlier run. See ci.yml.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-release-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'go.sum', 'nix/**') }}
+          restore-prefixes-first-match: nix-release-${{ runner.os }}-${{ runner.arch }}-
+      # Each runner builds the package for its own system. Nix does not need
+      # emulation. The flake sets the version to the commit. The override sets
+      # it to the tag without the "v". CGO_ENABLED=0 makes a static binary.
+      - name: Build the binary
+        run: |
+          nix build --impure --print-build-logs --expr "
+            ((builtins.getFlake \"git+file://$PWD\").packages.${{ matrix.system }}.default.override {
+              version = \"${GITHUB_REF_NAME#v}\";
+            })"
+      - name: Make the archive
+        run: |
+          name="sovr-harvest_${GITHUB_REF_NAME#v}_linux_${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          install -m 0755 result/bin/sovr-harvest "dist/$name/"
+          cp LICENSE README.md "dist/$name/"
+          tar -C dist --owner=0 --group=0 --numeric-owner -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: publish and sign
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      # Keyless cosign signs with the OIDC token of this workflow.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Make the checksums
+        working-directory: dist
+        run: sha256sum -- *.tar.gz > SHA256SUMS
+      # The signature of SHA256SUMS also covers each archive.
+      - name: Sign the checksums
+        working-directory: dist
+        run: nix run --inputs-from .. nixpkgs#cosign -- sign-blob --yes --bundle SHA256SUMS.sigstore.json SHA256SUMS
+      - name: Verify the signature
+        working-directory: dist
+        run: |
+          nix run --inputs-from .. nixpkgs#cosign -- verify-blob SHA256SUMS \
+            --bundle SHA256SUMS.sigstore.json \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --certificate-identity "https://github.com/$GITHUB_WORKFLOW_REF"
+      # Make the release if it does not exist. Then add the files to it.
+      # A tag with "-" (for example v1.2.0-rc1) gives a prerelease.
+      - name: Publish the release
+        run: |
+          flags=()
+          [[ "$GITHUB_REF_NAME" == *-* ]] && flags+=(--prerelease)
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes "${flags[@]}"
+          gh release upload "$GITHUB_REF_NAME" --clobber dist/*
+        env:
+          GH_TOKEN: ${{ github.token }}

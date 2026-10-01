@@ -1,0 +1,66 @@
+groups:
+  - name: sovr-harvest
+    rules:
+      - alert: SovrHarvestDown
+        expr: up{job="sovr-harvest"} == 0
+        for: 15m
+      - alert: SovrHarvestPollFailing
+        expr: time() - sovr_harvest_last_successful_poll_timestamp_seconds > 1800
+        for: 5m
+        annotations:
+          summary: every sovr-harvest poll for 30m has returned an error
+      - alert: SovrHarvestNoRecentClaim
+        # For each validator: the claimable rewards are at min_claim or more, and
+        # there was no claim in 2 days or since the claimer started. The claimable
+        # rewards include only the sources that the validator claims. 2 days is the
+        # 24h interval, plus the 30m jitter, plus a margin.
+        expr: |
+          sovr_harvest_claimable_usovr >= sovr_harvest_min_claim_usovr
+          unless on (validator)
+          (time() - sovr_harvest_last_claim_timestamp_seconds < 2 * 86400)
+        for: 1h
+        annotations:
+          summary: "{{ $labels.validator }} has not been claimed in 2 days"
+      - alert: SovrHarvestClaimFailing
+        # Two failures in a row. Thus, one temporary failure does not page if the
+        # 5m retry is successful. This alert covers all failures: secret fetch,
+        # wrong mnemonic, simulate, fee limits, missing grant, broadcast, confirm.
+        expr: sovr_harvest_claim_consecutive_failures >= 2
+        annotations:
+          summary: "{{ $labels.validator }}: {{ $value }} claim attempts in a row failed; see sovr_harvest_errors_total by stage"
+      - alert: SovrHarvestNoRecentRestake
+        # For each validator with restake: the operator balance above the
+        # reserve is at min_restake or more, and there was no restake in
+        # restake_interval plus 1 day, or since the claimer started. The extra
+        # day covers the jitter, the backoff, and the polls in which a claim
+        # goes first. restakeable is 0 while the validator is
+        # jailed, its withdraw address is wrong, or the delegate grant is
+        # missing, expires before tx_timeout, or has a limit that is too low.
+        # Other alerts show these faults.
+        expr: |
+          sovr_harvest_restakeable_usovr >= sovr_harvest_min_restake_usovr
+          unless on (validator)
+          (time() - sovr_harvest_last_restake_timestamp_seconds < sovr_harvest_restake_interval_seconds + 86400)
+        for: 1h
+        annotations:
+          summary: "{{ $labels.validator }} has not been restaked in restake_interval plus 1 day"
+      - alert: SovrHarvestRestakeFailing
+        # Two failures in a row, as for the claims. This alert also covers a
+        # wrong withdraw address, a missing or too broad delegate grant, and a
+        # delegate grant limit that is less than min_restake (grant_limit).
+        expr: sovr_harvest_restake_consecutive_failures >= 2
+        annotations:
+          summary: "{{ $labels.validator }}: {{ $value }} restake attempts in a row failed; see sovr_harvest_restake_attempts_total by result"
+      - alert: SovrHarvestLowBalance
+        expr: sovr_harvest_account_balance_usovr{role="signer"} < 100000
+        for: 1h
+        annotations:
+          summary: signing account may not cover claim fees
+      - alert: SovrHarvestGrantExpiring
+        # This alert also fires for a missing grant, because its expiry is 0.
+        expr: sovr_harvest_authz_grant_expiry_timestamp_seconds - time() < 14 * 86400
+        annotations:
+          summary: authz grant for {{ $labels.msg_type }} is missing or expires within 14 days
+      - alert: SovrValidatorNotBonded
+        expr: sovr_harvest_validator_bonded == 0 or sovr_harvest_validator_jailed == 1
+        for: 10m

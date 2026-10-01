@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      # Restores the Nix store from an earlier run. The Go dependency cache
+      # (goCache) takes approximately 2 minutes to build. Only main saves the
+      # cache, because a pull request cannot use the cache of another one.
+      - uses: nix-community/cache-nix-action@v7
+        with:
+          primary-key: nix-ci-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('flake.lock', 'go.sum', 'nix/**') }}
+          restore-prefixes-first-match: nix-ci-${{ runner.os }}-${{ runner.arch }}-
+          save: ${{ github.ref == 'refs/heads/main' }}
+      # Runs the Go tests, the NixOS module check, and the promtool alert tests.
+      - run: nix flake check --print-build-logs
+      # The OCI image is not in the checks. Build it to find errors early.
+      - run: nix build .#docker --print-build-logs

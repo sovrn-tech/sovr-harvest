@@ -1,0 +1,93 @@
+# promtool test rules alerts_test.yml (run by nix flake check)
+rule_files: [alerts.yml]
+evaluation_interval: 5m
+tests:
+  # Validator a claims normally. Validator b did not claim, and its rewards
+  # are high. The old rule did not see b, because the last_claim series of a
+  # existed. Validator c has pending rewards, but they are less than its
+  # min_claim. Thus, c is not due.
+  - interval: 5m
+    input_series:
+      - series: sovr_harvest_claimable_usovr{validator="a"}
+        values: 20e6x30
+      - series: sovr_harvest_min_claim_usovr{validator="a"}
+        values: 1e6x30
+      - series: sovr_harvest_last_claim_timestamp_seconds{validator="a"}
+        values: 0x30
+      - series: sovr_harvest_claimable_usovr{validator="b"}
+        values: 12e6x30
+      - series: sovr_harvest_min_claim_usovr{validator="b"}
+        values: 1e6x30
+      - series: sovr_harvest_claimable_usovr{validator="c"}
+        values: 50e6x30
+      - series: sovr_harvest_min_claim_usovr{validator="c"}
+        values: 100e6x30
+      - series: sovr_harvest_claim_consecutive_failures{validator="a"}
+        values: 0 1 0 1 2 2
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SovrHarvestNoRecentClaim
+        exp_alerts:
+          - exp_labels: {validator: b}
+            exp_annotations: {summary: "b has not been claimed in 2 days"}
+      - eval_time: 10m
+        alertname: SovrHarvestClaimFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SovrHarvestClaimFailing
+        exp_alerts:
+          - exp_labels: {validator: a}
+            exp_annotations: {summary: "a: 2 claim attempts in a row failed; see sovr_harvest_errors_total by stage"}
+  # Validator a restakes normally. Validator b did not restake, and its
+  # restakeable balance is high. Validator c has a balance, but it is less
+  # than its min_restake. The delegate grant limit of validator d is less
+  # than its min_restake (grant_limit): restakeable is 0, and the restakes
+  # fail.
+  - interval: 5m
+    input_series:
+      - series: sovr_harvest_restakeable_usovr{validator="a"}
+        values: 20e6x30
+      - series: sovr_harvest_min_restake_usovr{validator="a"}
+        values: 1e6x30
+      - series: sovr_harvest_last_restake_timestamp_seconds{validator="a"}
+        values: 0x30
+      - series: sovr_harvest_restake_interval_seconds{validator="a"}
+        values: 86400x30
+      - series: sovr_harvest_restake_interval_seconds{validator="b"}
+        values: 86400x30
+      - series: sovr_harvest_restake_interval_seconds{validator="c"}
+        values: 86400x30
+      - series: sovr_harvest_restake_interval_seconds{validator="d"}
+        values: 86400x30
+      - series: sovr_harvest_restakeable_usovr{validator="b"}
+        values: 12e6x30
+      - series: sovr_harvest_min_restake_usovr{validator="b"}
+        values: 1e6x30
+      - series: sovr_harvest_restakeable_usovr{validator="c"}
+        values: 5e5x30
+      - series: sovr_harvest_min_restake_usovr{validator="c"}
+        values: 1e6x30
+      - series: sovr_harvest_restake_consecutive_failures{validator="b"}
+        values: 0 1 0 1 2 2
+      - series: sovr_harvest_restakeable_usovr{validator="d"}
+        values: 0x30
+      - series: sovr_harvest_min_restake_usovr{validator="d"}
+        values: 1e6x30
+      - series: sovr_harvest_restake_consecutive_failures{validator="d"}
+        values: 0 0 1 2 3 3
+    alert_rule_test:
+      - eval_time: 90m
+        alertname: SovrHarvestNoRecentRestake
+        exp_alerts:
+          - exp_labels: {validator: b}
+            exp_annotations: {summary: "b has not been restaked in restake_interval plus 1 day"}
+      - eval_time: 10m
+        alertname: SovrHarvestRestakeFailing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: SovrHarvestRestakeFailing
+        exp_alerts:
+          - exp_labels: {validator: b}
+            exp_annotations: {summary: "b: 2 restake attempts in a row failed; see sovr_harvest_restake_attempts_total by result"}
+          - exp_labels: {validator: d}
+            exp_annotations: {summary: "d: 3 restake attempts in a row failed; see sovr_harvest_restake_attempts_total by result"}

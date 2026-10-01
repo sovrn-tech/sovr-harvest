@@ -1,0 +1,45 @@
+# sovr-harvest config. This file holds no secrets.
+
+chain_id      = "sovr-1"
+# If possible, use your own node: "127.0.0.1:9090" with grpc_insecure = true.
+grpc_endpoint = "grpc.sovrchain.net:443"
+listen_address = "127.0.0.1:9657"
+
+poll_interval  = "5m"   # how frequently the claimer updates the metrics and checks for claims
+claim_interval = "24h"  # minimum time between claims for one validator
+claim_jitter   = "30m"  # maximum random delay on top of claim_interval and restake_interval
+restake_interval = "24h" # minimum time between restakes for one validator
+
+gas_price      = "0.002usovr" # chain minimum is 0.001usovr
+gas_adjustment = 1.4
+max_fee        = 50000        # usovr; the claimer does not send a claim tx that costs more
+tx_timeout     = "2m"
+
+[onepassword]
+# Default: $CREDENTIALS_DIRECTORY/op-service-account-token, then
+# the OP_SERVICE_ACCOUNT_TOKEN environment variable.
+# token_file = "/run/secrets/op-service-account-token"
+
+# Alternative to 1Password: a local secrets file, for hosts that cannot
+# reach 1Password. mnemonic_ref then uses file://key instead of op://...
+# [secrets_file]
+# path = "/run/secrets/sovr-harvest-mnemonics.toml"
+
+[[validator]]
+operator_address = "sovrvaloper1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqpwmje0"
+# Recommended: sign with an authz grantee that can only withdraw rewards
+# (refer to README.md). mnemonic_ref is then the mnemonic of the grantee. To
+# sign with the operator key, do not set grantee_address.
+# grantee_address = "sovr1..."
+mnemonic_ref     = "op://vault/validator/mnemonic"
+# hd_path        = "m/44'/118'/0'/0/0"
+min_claim        = 1000000   # usovr (1 SOVR); 0 means this default
+# claim_commission      = true
+# claim_self_delegation = true
+# Restake: delegate the operator balance to this validator at regular
+# intervals. The restake keeps restake_reserve in the operator account for
+# fees. Refer to README.md. With a grantee, the grantee needs a delegate
+# grant that allows only this validator.
+# restake          = false
+# restake_reserve  = 1000000 # usovr (1 SOVR); without a grantee, at least max_fee
+# min_restake      = 1000000 # usovr; 0 means this default

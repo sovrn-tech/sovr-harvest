@@ -68,6 +68,7 @@
           packages = with nixpkgs.legacyPackages.${system}; [
             go
             gopls
+            govulncheck
             grpcurl
           ];
           CGO_ENABLED = 0;

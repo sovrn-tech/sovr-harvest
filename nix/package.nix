@@ -63,7 +63,7 @@ let
         ../internal
       ];
     };
-    vendorHash = "sha256-f+bNg3v33Gxx4HPkWX7scL7JnR+hlRTbBWYE6hJcteA=";
+    vendorHash = "sha256-iGpSClmNCE2IK2o8H+BbT89tecZGltjaFqaF1kcrPv4=";
     # Without subPackages, buildGoModule runs dirname once for each .go file
     # in the vendor directory to find the packages. That takes approximately
     # 16 seconds for each phase. "./..." does not include the vendor directory.

@@ -331,7 +331,14 @@ For the secrets file, set `secretsFile` instead of `tokenFile`, and set
 
 ## Binary releases
 
-Each `v*` git tag gives a GitHub release with a static binary for
+Only users with Maintain or Admin access can create `v*` git tags. These tags
+cannot be changed or deleted. A release tag must point to a commit on `main`.
+Before a publish starts, the workflow checks the ref and runs CI for that
+exact commit. A failed check stops the publish.
+These workflow checks apply to commits that contain them. Older commits
+retain their older workflows.
+
+Each accepted `v*` git tag gives a GitHub release with a static binary for
 `linux/amd64` and `linux/arm64`. CI builds each binary from the flake package
 on a runner of the same architecture. A tag with `-` gives a prerelease.
 Cosign signs `SHA256SUMS` without a key.
@@ -341,7 +348,7 @@ Before you use an archive, verify the signature and the checksum:
 cosign verify-blob SHA256SUMS \
   --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/sovrn-tech/sovr-harvest/\.github/workflows/release\.yml@'
+  --certificate-identity-regexp '^https://github\.com/sovrn-tech/sovr-harvest/\.github/workflows/release\.yml@refs/tags/v[^/]+$'
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
@@ -364,12 +371,17 @@ CI publishes a multi-arch image (`amd64`, `arm64`) to
 `main` and the short commit hash. Each `v*` git tag gives the version
 without the `v` and `latest`. A tag with `-` (for example `v1.2.0-rc1`) is a
 prerelease. It does not move `latest`. Cosign signs each image without a key.
+Manual image runs must use `main`. All image publishes require the same ref
+and CI checks as binary releases.
+The build jobs have read-only repository access and no registry credentials.
+They upload image archives. A separate job downloads, pushes, and signs the
+images. Only that job has registry write access.
 Before you use an image, verify its signature:
 
 ```sh
 cosign verify ghcr.io/sovrn-tech/sovr-harvest:<tag> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/sovrn-tech/sovr-harvest/\.github/workflows/image\.yml@'
+  --certificate-identity-regexp '^https://github\.com/sovrn-tech/sovr-harvest/\.github/workflows/image\.yml@(refs/heads/main|refs/tags/v[^/]+)$'
 ```
 
 The image reads `/etc/sovr-harvest/config.toml`. In that config, set these

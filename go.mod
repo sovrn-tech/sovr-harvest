@@ -1,6 +1,6 @@
 module github.com/sovrn-tech/sovr-harvest
 
-go 1.26.7
+go 1.26.10
 
 require (
 	cosmossdk.io/math v1.5.3
